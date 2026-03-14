@@ -1,70 +1,101 @@
-# This workflow will upload a Python Package to PyPI when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
-
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-name: Upload Python Package
+name: Python package publish
 
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish-to:
+        description: "Select destination repository"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - testpypi
+          - pypi
+          - both
 
 permissions:
   contents: read
 
 jobs:
-  release-build:
+  build:
+    name: Build distributions
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
       - name: Build release distributions
         run: |
-          # NOTE: put your own distribution build steps here.
-          python -m pip install build
+          python -m pip install --upgrade build
           python -m build
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
-          name: release-dists
+          name: python-package-distributions
           path: dist/
 
-  pypi-publish:
+  publish-testpypi:
+    name: Publish to TestPyPI
     runs-on: ubuntu-latest
-    needs:
-      - release-build
+    needs: build
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.publish-to == 'testpypi' ||
+      inputs.publish-to == 'both'
     permissions:
-      # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
-
-    # Dedicated environments with protections for publishing are strongly recommended.
-    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
     environment:
-      name: pypi
-      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
-      # url: https://pypi.org/p/YOURPROJECT
-      #
-      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
-      # ALTERNATIVE: exactly, uncomment the following line instead:
-      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
-
+      name: testpypi
+      url: https://test.pypi.org/project/git-raf/
     steps:
-      - name: Retrieve release distributions
+      - name: Download distributions
         uses: actions/download-artifact@v4
         with:
-          name: release-dists
+          name: python-package-distributions
           path: dist/
 
-      - name: Publish release distributions to PyPI
+      - name: Publish distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - publish-testpypi
+    if: |
+      always() &&
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.publish-to == 'pypi' ||
+      inputs.publish-to == 'both') &&
+      (needs.publish-testpypi.result == 'success' || needs.publish-testpypi.result == 'skipped')
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/git-raf/
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
